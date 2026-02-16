@@ -1,0 +1,19 @@
+columns:
+  - date
+  - city
+  - shop_id
+  - shop_name
+  - item_category_id
+  - item_category_name
+  - item_id
+  - item_name
+  - unique_id
+  - item_price
+  - item_cnt_day
+
+numerical_columns:
+  - shop_id
+  - item_category_id
+  - item_id
+  - item_price
+  - item_cnt_day

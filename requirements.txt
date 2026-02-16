@@ -1,0 +1,13 @@
+python-dotenv
+pandas
+numpy
+pymongo
+certifi
+setuptools
+scikit-learn
+prometheus_client
+pyyaml
+xgboost
+mlflow
+python-multipart
+dvc
