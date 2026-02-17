@@ -183,6 +183,22 @@ class DataValidation:
         except Exception as e:
             raise SalesForecastException(e, sys)
 
+    def write_no_drift_report_same_source(self, dataframe: pd.DataFrame) -> None:
+        try:
+            report: Dict[str, Any] = {}
+            for column in dataframe.columns:
+                report[column] = {
+                    "p_value": 1.0,
+                    "drift_status": False,
+                    "note": "same_source_file",
+                }
+            write_yaml_file(
+                file_path=self.data_validation_config.drift_report_file_path,
+                content=report,
+            )
+        except Exception as e:
+            raise SalesForecastException(e, sys)
+
 
 
     # Orquesta todo el proceso de validación
@@ -206,10 +222,23 @@ class DataValidation:
             if not status:
                 logging.warning("Test dataframe does not contain all columns.")
 
-            # Detecta drift
-            status = self.detect_dataset_drift(
-                base_df=train_dataframe, current_df=test_dataframe
-            )
+            # Valida columnas numericas requeridas
+            if not self.is_numerical_column_exist(train_dataframe):
+                logging.warning("Train dataframe missing numerical columns from schema.")
+                status = False
+            if not self.is_numerical_column_exist(test_dataframe):
+                logging.warning("Test dataframe missing numerical columns from schema.")
+                status = False
+
+            # Detecta drift solo si son datasets distintos
+            if os.path.abspath(train_file_path) != os.path.abspath(test_file_path):
+                drift_ok = self.detect_dataset_drift(
+                    base_df=train_dataframe, current_df=test_dataframe
+                )
+                status = status and drift_ok
+            else:
+                logging.info("Se omite drift: train y test apuntan al mismo archivo.")
+                self.write_no_drift_report_same_source(train_dataframe)
 
             # Crea directorio de salida
             dir_path = os.path.dirname(self.data_validation_config.valid_train_file_path)
@@ -249,10 +278,10 @@ class DataValidation:
 
 # Ejecución independiente para pruebas
 if __name__ == "__main__":
-    # Artefacto simulado de ingestión
+    # Validación sobre feature_store (sin split previo)
     ingestion_artifact = DataIngestionArtifact(
-        trained_file_path="artifacts/train/train.csv",
-        test_file_path="artifacts/test/test.csv",
+        trained_file_path="artifacts/feature_store/forecast.csv",
+        test_file_path="artifacts/feature_store/forecast.csv",
     )
 
     # Configuración de validación

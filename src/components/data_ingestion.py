@@ -14,9 +14,6 @@ import pymongo
 from dotenv import load_dotenv
 
 
-# Para dividir los datos en entrenamiento y prueba
-from sklearn.model_selection import train_test_split
-
 # Importa la excepción personalizada
 from src.exception.exception import SalesForecastException
 # Importa el logger configurado
@@ -35,8 +32,8 @@ class DataIngestionConfig:
     database_name: str
     collection_name: str
     feature_store_file_path: str
-    training_file_path: str
-    testing_file_path: str
+    training_file_path: str = ""
+    testing_file_path: str = ""
     train_test_split_ratio: float = 0.2
 
 
@@ -44,8 +41,7 @@ class DataIngestionConfig:
 # Define el artefacto que se devolverá tras la ingestión
 @dataclass
 class DataIngestionArtifact:
-    trained_file_path: str
-    test_file_path: str
+    feature_store_file_path: str
 
 
 # Clase principal para la ingestión de datos
@@ -112,56 +108,21 @@ class DataIngestion:
         except Exception as e:
             raise SalesForecastException(e, sys)
         
-    # Divide los datos en entrenamiento y prueba
-    def split_data_as_train_test(self, dataframe: pd.DataFrame) -> None:
-        try:
-            # Realiza la división train/test
-            train_set, test_set = train_test_split(
-                dataframe, test_size=self.data_ingestion_config.train_test_split_ratio
-            )
-
-            # Loggea la operación
-            logging.info("Performed train test split on the dataframe")
-
-            # Obtiene directorios de salida
-            train_dir = os.path.dirname(self.data_ingestion_config.training_file_path)
-            test_dir = os.path.dirname(self.data_ingestion_config.testing_file_path)
-
-            # Crea los directorios si no existen
-            os.makedirs(train_dir, exist_ok=True)
-            os.makedirs(test_dir, exist_ok=True)
-
-            # Guarda los archivos CSV
-            train_set.to_csv(
-                self.data_ingestion_config.training_file_path, index=False, header=True
-            )
-            test_set.to_csv(
-                self.data_ingestion_config.testing_file_path, index=False, header=True
-            )
-
-            # Loggea la exportación
-            logging.info("Exported train and test file path.")
-
-        except Exception as e:
-            raise SalesForecastException(e, sys)
-
-
     # Orquesta todo el proceso de ingestión
     def initiate_data_ingestion(self) -> DataIngestionArtifact:
         try:
-            # Exporta datos desde MongoDB
-            dataframe = self.export_collection_as_dataframe()
-
-            # Guarda datos en el feature store
-            dataframe = self.export_data_into_feature_store(dataframe)
-
-            # Divide en train/test
-            self.split_data_as_train_test(dataframe=dataframe)
+            feature_store_file_path = self.data_ingestion_config.feature_store_file_path
+            if os.path.exists(feature_store_file_path):
+                dataframe = pd.read_csv(feature_store_file_path)
+                logging.info("Using existing feature store file: %s", feature_store_file_path)
+            else:
+                dataframe = self.export_collection_as_dataframe()
+                dataframe = self.export_data_into_feature_store(dataframe)
+                logging.info("Feature store created from Mongo: %s", feature_store_file_path)
 
             # Crea el artefacto de salida
             data_ingestion_artifact = DataIngestionArtifact(
-                trained_file_path=self.data_ingestion_config.training_file_path,
-                test_file_path=self.data_ingestion_config.testing_file_path,
+                feature_store_file_path=feature_store_file_path,
             )
 
             # Devuelve el artefacto
@@ -177,9 +138,7 @@ if __name__ == "__main__":
         database_name='SalesForecastCurso',
         collection_name='forecastCurso',
         feature_store_file_path='artifacts/feature_store/forecast.csv',
-        training_file_path='artifacts/train/train.csv',
-        testing_file_path='artifacts/test/test.csv',
-        train_test_split_ratio=0.2,)
+    )
     
     ingestion = DataIngestion(config)
     artifact = ingestion.initiate_data_ingestion()
