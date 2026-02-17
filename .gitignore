@@ -4,3 +4,4 @@ logs/
 SalesForec.egg-info
 artifacts
 mlruns/
+.env

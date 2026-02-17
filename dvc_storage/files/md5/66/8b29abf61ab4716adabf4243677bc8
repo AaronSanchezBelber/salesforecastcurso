@@ -1,0 +1,21 @@
+model_path: artifacts/model/xgb_model.joblib
+target_column: MONTHLY_SALES
+n_features: 14
+n_train: 5597
+n_valid: 1441
+n_test: 1428
+train_metrics:
+  rmse: 29.81791674063052
+  mae: 11.356755163449357
+  r2: 0.8617366224322436
+valid_metrics:
+  rmse: 37.14838280489994
+  mae: 13.267525659014499
+  r2: 0.758783625135038
+test_metrics:
+  rmse: 25.878816703662572
+  mae: 9.710883289492097
+  r2: 0.7886423661467687
+overfit:
+  rmse_gap_valid_minus_train: 7.3304660642694195
+  rmse_ratio_valid_div_train: 1.2458409864120645

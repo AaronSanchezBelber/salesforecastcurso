@@ -1,0 +1,44 @@
+date:
+  p_value: 1.0
+  drift_status: false
+  note: same_source_file
+shop_id:
+  p_value: 1.0
+  drift_status: false
+  note: same_source_file
+item_category_id:
+  p_value: 1.0
+  drift_status: false
+  note: same_source_file
+item_cnt_day:
+  p_value: 1.0
+  drift_status: false
+  note: same_source_file
+item_name:
+  p_value: 1.0
+  drift_status: false
+  note: same_source_file
+item_category_name:
+  p_value: 1.0
+  drift_status: false
+  note: same_source_file
+unique_id:
+  p_value: 1.0
+  drift_status: false
+  note: same_source_file
+shop_name:
+  p_value: 1.0
+  drift_status: false
+  note: same_source_file
+item_id:
+  p_value: 1.0
+  drift_status: false
+  note: same_source_file
+city:
+  p_value: 1.0
+  drift_status: false
+  note: same_source_file
+item_price:
+  p_value: 1.0
+  drift_status: false
+  note: same_source_file
