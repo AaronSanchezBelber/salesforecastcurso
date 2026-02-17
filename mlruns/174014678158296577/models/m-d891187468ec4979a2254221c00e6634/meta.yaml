@@ -1,0 +1,10 @@
+artifact_location: file:///C:/Users/dataa/Desktop/business/videos/salesforecast/mlruns/174014678158296577/models/m-d891187468ec4979a2254221c00e6634/artifacts
+creation_timestamp: 1771341797758
+experiment_id: '174014678158296577'
+last_updated_timestamp: 1771341801715
+model_id: m-d891187468ec4979a2254221c00e6634
+model_type: null
+name: model
+source_run_id: 9777affc16df40eda26775aeafc5b712
+status: 2
+status_message: null

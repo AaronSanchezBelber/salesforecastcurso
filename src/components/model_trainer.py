@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 # Importa librerías externas
 import joblib
+import mlflow
+import mlflow.xgboost
 import pandas as pd
 import xgboost as xgb
 from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
@@ -31,6 +33,7 @@ class ModelTrainerConfig:
     data_path_Y_train: str  # Ruta del dataset Y de entrenamiento
     data_path_Y_valida: str  # Ruta del dataset Y de validación
     target_column: str = "MONTHLY_SALES"  # Nombre de la columna objetivo
+    mlflow_experiment_name: str = "salesforecast-training"
 
 
 # Clase principal del entrenador del modelo
@@ -151,6 +154,37 @@ class ModelTrainer:
                 mae,
                 r2,
             )
+
+            # Registro en MLflow
+            tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "file:./mlruns")
+            mlflow.set_tracking_uri(tracking_uri)
+            mlflow.set_experiment(self.config.mlflow_experiment_name)
+            with mlflow.start_run(run_name="model_trainer_xgboost"):
+                mlflow.log_params(
+                    {
+                        "model_type": "xgboost_regressor",
+                        "target_column": self.config.target_column,
+                        "n_estimators": model.get_params().get("n_estimators"),
+                        "learning_rate": model.get_params().get("learning_rate"),
+                        "max_depth": model.get_params().get("max_depth"),
+                        "min_child_weight": model.get_params().get("min_child_weight"),
+                        "gamma": model.get_params().get("gamma"),
+                        "subsample": model.get_params().get("subsample"),
+                        "colsample_bytree": model.get_params().get("colsample_bytree"),
+                        "reg_alpha": model.get_params().get("reg_alpha"),
+                        "reg_lambda": model.get_params().get("reg_lambda"),
+                    }
+                )
+                mlflow.log_metrics(
+                    {
+                        "rmse_train": float(rmse_train),
+                        "rmse_valid": float(rmse),
+                        "mae_valid": float(mae),
+                        "r2_valid": float(r2),
+                    }
+                )
+                mlflow.log_artifact(model_path, artifact_path="model_artifact")
+                mlflow.xgboost.log_model(model, artifact_path="model")
 
             # Envío de métricas a Prometheus si está configurado
             pushgateway_url = os.getenv("PUSHGATEWAY_URL")

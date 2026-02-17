@@ -1,0 +1,14 @@
+artifact_uri: file:///C:/Users/dataa/Desktop/business/videos/salesforecast/mlruns/115963544078864528/659ff6e28d3645b781bba0c38994b616/artifacts
+end_time: 1771340918618
+entry_point_name: ''
+experiment_id: '115963544078864528'
+lifecycle_stage: active
+run_id: 659ff6e28d3645b781bba0c38994b616
+run_name: data_evaluation
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1771340918515
+status: 3
+tags: []
+user_id: dataa
