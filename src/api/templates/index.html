@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SalesForecast Batch Upload</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+
+  <body>
+    <main class="container">
+      <h1>Subir Batch CSV</h1>
+      <p>Sube un CSV con las columnas originales para ejecutar todo el pipeline.</p>
+
+      <form id="predictForm" class="card" enctype="multipart/form-data">
+        <label class="file">
+          <input id="csvFile" type="file" name="file" accept=".csv" required />
+          <span>Seleccionar CSV</span>
+        </label>
+        <button type="submit">Ejecutar Pipeline y Predecir</button>
+      </form>
+
+      <section class="note">
+        <h2>Formato esperado</h2>
+        <p>Usa las columnas originales del CSV base.</p>
+      </section>
+
+      <section class="preview">
+        <h2>Previsualización</h2>
+        <div id="previewStatus" class="muted">No hay archivo cargado.</div>
+        <div id="previewColumns" class="columns"></div>
+        <div id="previewSample" class="sample"></div>
+      </section>
+
+      <section class="results">
+        <h2>Predicciones</h2>
+        <div id="resultsStatus" class="muted">Aún no hay resultados.</div>
+        <div id="resultsTable"></div>
+      </section>
+
+    </main>
+
+    <script src="/static/preview.js"></script>
+    <script src="/static/predict.js"></script>
+    
+  </body>
+  
+</html>

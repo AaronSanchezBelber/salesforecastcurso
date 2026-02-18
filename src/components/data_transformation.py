@@ -3,6 +3,7 @@
 import os
 import sys
 from dataclasses import dataclass
+from typing import Callable, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -15,152 +16,318 @@ from src.logging.logger import logging
 @dataclass
 class DataTransformationConfig:
     root_dir: str
-    source_path: str
-    train_ratio: float = 0.7
-    valid_ratio: float = 0.15
-    test_ratio: float = 0.15
+    train_path: str
+    test_path: str
 
 
 class DataTransformation:
     def __init__(self, config: DataTransformationConfig):
         self.config = config
 
-    @staticmethod
-    def _validate_schema(dataframe: pd.DataFrame) -> None:
-        expected_columns = {
-            "date",
-            "shop_id",
-            "item_category_id",
-            "item_cnt_day",
-            "item_name",
-            "item_category_name",
-            "unique_id",
-            "shop_name",
-            "item_id",
-            "city",
-            "item_price",
-        }
-        missing = sorted(expected_columns.difference(set(dataframe.columns)))
-        if missing:
-            raise ValueError(f"Faltan columnas en feature_store: {missing}")
-
-    def build_modeling_dataframe(self, source_df: pd.DataFrame) -> pd.DataFrame:
+    # -------------------- PREPROCESS --------------------
+    def preprocess_df(self, df: pd.DataFrame, save: bool = True) -> pd.DataFrame:
         try:
-            df = source_df.copy()
-            df.columns = [c.upper() for c in df.columns]
+            # Convertir nombres de columnas a mayúsculas
+            df.columns = map(str.upper, df.columns)
+
+            # Convertir columna DATE a datetime
+            df["DATE"] = pd.to_datetime(df["DATE"], format="%Y-%m-%d", errors="coerce")
+
+            # Extraer hora y día de la semana
+            df["HOUR"] = df["DATE"].dt.hour
+            df["DAY_OF_WEEK"] = df["DATE"].dt.day_of_week
+
+            # Codificar ciudad en variable numérica
+            df["CITY_ID"] = OrdinalEncoder().fit_transform(df[["CITY"]])
+
+            # Renombrar columnas
+            df.rename(columns={"CITY": "CITY_NAME", "ITEM_CNT_DAY": "SALES"}, inplace=True)
+
+            # Guardar si es necesario
+            if save:
+                os.makedirs(self.config.root_dir, exist_ok=True)
+                out = os.path.join(self.config.root_dir, "01preprocess_df.csv")
+                df.to_csv(out, index=False)
+                logging.info(f"Saved preprocess dataframe to {out}")
+
+            print("Preprocess stage completed")
+            return df
+
+        except Exception as e:
+            raise SalesForecastException(e, sys)
+
+    # -------------------- TIME VARIABLES --------------------
+    def time_vars(self, df: pd.DataFrame) -> pd.DataFrame:
+        try:
+            # Días festivos
+            df.loc[df["DAY_OF_WEEK"] > 4, "HOLIDAYS_DAYS_REVENUE"] = df["SALES"] * df["ITEM_PRICE"]
+            df.loc[df["DAY_OF_WEEK"] < 5, "HOLIDAYS_DAYS_REVENUE"] = 0
+
+            # Ventas días laborales y festivos
+            df["WORK_DAYS_SALES"] = np.where(df["DAY_OF_WEEK"] < 5, df["SALES"], 0)
+            df["HOLIDAYS_DAYS_SALES"] = np.where(df["DAY_OF_WEEK"] > 4, df["SALES"], 0)
+
+            # Guardar
+            out = os.path.join(self.config.root_dir, "02time_vars.csv")
+            df.to_csv(out, index=False)
+            logging.info(f"Saved time vars dataframe to {out}")
+
+            print("Time vars stage completed")
+            return df
+
+        except Exception as e:
+            raise SalesForecastException(e, sys)
+
+    # -------------------- CASH VARIABLES --------------------
+    def cash_vars(self, df: pd.DataFrame) -> pd.DataFrame:
+        try:
+            df["REVENUE"] = df["ITEM_PRICE"] * df["SALES"]
+            df["UNIQUE_DAYS_WITH_SALES"] = df["DATE"]
+            df["TOTAL_TRANSACTIONS"] = df["SALES"]
+            df["MONTH_DAY"] = df["DATE"].dt.month
+
+            out = os.path.join(self.config.root_dir, "03cash_vars.csv")
+            df.to_csv(out, index=False)
+            logging.info(f"Saved cash vars dataframe to {out}")
+
+            print("Cash vars stage completed")
+            return df
+
+        except Exception as e:
+            raise SalesForecastException(e, sys)
+
+    # -------------------- MONTHLY AGGREGATION --------------------
+    def groupby_month(self, df: pd.DataFrame) -> pd.DataFrame:
+        try:
             df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
-            df = df.dropna(subset=["DATE"])
-            df["UNIQUE_ID"] = df["UNIQUE_ID"].astype(str)
-            df["CITY_ID"] = OrdinalEncoder().fit_transform(df[["CITY"]]).astype(int)
 
-            monthly = (
-                df.groupby([pd.Grouper(key="DATE", freq="MS"), "UNIQUE_ID"], as_index=False)
+            df_monthly_agg = (
+                df.set_index("DATE")
+                .groupby(["UNIQUE_ID"])
+                .resample("MS")
                 .agg(
-                    MONTHLY_SALES=("ITEM_CNT_DAY", "sum"),
-                    ITEM_ID=("ITEM_ID", "first"),
-                    ITEM_CATEGORY_ID=("ITEM_CATEGORY_ID", "first"),
-                    CITY_ID=("CITY_ID", "first"),
-                    ITEM_PRICE_MEAN=("ITEM_PRICE", "mean"),
+                    {
+                        "SALES": np.sum,
+                        "REVENUE": np.sum,
+                        "UNIQUE_DAYS_WITH_SALES": lambda x: len(set(x)),
+                        "TOTAL_TRANSACTIONS": len,
+                        "ITEM_PRICE": np.mean,
+                        "HOLIDAYS_DAYS_REVENUE": np.sum,
+                        "HOLIDAYS_DAYS_SALES": np.sum,
+                        "WORK_DAYS_SALES": np.sum,
+                    }
                 )
-                .sort_values(["UNIQUE_ID", "DATE"])
-                .reset_index(drop=True)
+                .rename(
+                    columns={
+                        "SALES": "MONTHLY_SALES",
+                        "REVENUE": "MONTHLY_REVENUE",
+                        "ITEM_PRICE": "MONTHLY_MEAN_PRICE",
+                        "HOLIDAYS_DAYS_REVENUE": "MONTHLY_HOLIDAYS_DAYS_REVENUE",
+                        "HOLIDAYS_DAYS_SALES": "MONTHLY_HOLIDAYS_DAYS_SALES",
+                        "WORK_DAYS_SALES": "MONTHLY_WORK_DAYS_SALES",
+                    }
+                )
+                .reset_index()
             )
 
-            # Feature engineering sin fuga: solo historial y calendario.
-            monthly["LAG_1"] = monthly.groupby("UNIQUE_ID")["MONTHLY_SALES"].shift(1)
-            monthly["LAG_2"] = monthly.groupby("UNIQUE_ID")["MONTHLY_SALES"].shift(2)
-            monthly["LAG_3"] = monthly.groupby("UNIQUE_ID")["MONTHLY_SALES"].shift(3)
-            monthly["ROLLING_MEAN_3"] = monthly.groupby("UNIQUE_ID")["MONTHLY_SALES"].shift(1).rolling(3).mean().reset_index(level=0, drop=True)
-            monthly["ROLLING_STD_3"] = monthly.groupby("UNIQUE_ID")["MONTHLY_SALES"].shift(1).rolling(3).std().reset_index(level=0, drop=True)
+            out = os.path.join(self.config.root_dir, "04df_monthly_agg.csv")
+            df_monthly_agg.to_csv(out, index=False)
+            logging.info(f"Saved monthly agg dataframe to {out}")
 
-            monthly["DATE_YEAR"] = monthly["DATE"].dt.year
-            monthly["DATE_MONTH"] = monthly["DATE"].dt.month
-            monthly["DATE_QUARTER"] = monthly["DATE"].dt.quarter
+            print("Monthly aggregation stage completed")
+            return df_monthly_agg
 
-            parts = monthly["UNIQUE_ID"].str.split("-", n=1, expand=True)
-            monthly["UNIQUE_ID_SHOP"] = pd.to_numeric(parts[0], errors="coerce").fillna(-1).astype(int)
-            monthly["UNIQUE_ID_ITEM"] = pd.to_numeric(parts[1], errors="coerce").fillna(-1).astype(int)
-
-            monthly = monthly.drop(columns=["DATE", "UNIQUE_ID"])
-            monthly = monthly.fillna(0)
-            monthly = monthly.drop_duplicates()
-
-            return monthly
         except Exception as e:
             raise SalesForecastException(e, sys)
 
-    def split_transformed_data(self, transformed_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    # -------------------- BUILD FULL RANGE --------------------
+    def build_full_range(
+        self, df: pd.DataFrame, df_monthly_agg: pd.DataFrame, date: str = "2015-10-31"
+    ) -> pd.DataFrame:
         try:
-            if not np.isclose(self.config.train_ratio + self.config.valid_ratio + self.config.test_ratio, 1.0):
-                raise ValueError("train_ratio + valid_ratio + test_ratio debe sumar 1.0")
+            df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
+            df_monthly_agg["DATE"] = pd.to_datetime(df_monthly_agg["DATE"], errors="coerce")
+            df["UNIQUE_ID"] = df["UNIQUE_ID"].astype(str)
+            df_monthly_agg["UNIQUE_ID"] = df_monthly_agg["UNIQUE_ID"].astype(str)
 
-            df = transformed_df.copy()
-            split_date = pd.to_datetime(
-                df["DATE_YEAR"].astype(int).astype(str)
-                + "-"
-                + df["DATE_MONTH"].astype(int).astype(str)
-                + "-01",
-                errors="coerce",
+            min_date = df["DATE"].min()
+            date_prediction = np.datetime64(date)
+
+            unique_id = sorted(df_monthly_agg["UNIQUE_ID"].unique())
+            date_range = pd.date_range(min_date, date_prediction, freq="ME")
+
+            cartesian_product = pd.MultiIndex.from_product(
+                [date_range, unique_id], names=["DATE", "UNIQUE_ID"]
             )
-            df["SPLIT_DATE"] = split_date
-            df = df.dropna(subset=["SPLIT_DATE"]).sort_values("SPLIT_DATE").reset_index(drop=True)
 
-            unique_dates = np.array(sorted(df["SPLIT_DATE"].dt.date.unique()))
-            if len(unique_dates) < 3:
-                raise ValueError("No hay suficientes meses para split train/valid/test.")
+            full_df = pd.DataFrame(index=cartesian_product).reset_index()
+            full_df = pd.merge(df_monthly_agg, full_df, on=["DATE", "UNIQUE_ID"], how="right")
 
-            train_end_idx = max(1, int(len(unique_dates) * self.config.train_ratio))
-            valid_end_idx = max(train_end_idx + 1, int(len(unique_dates) * (self.config.train_ratio + self.config.valid_ratio)))
-            train_end_idx = min(train_end_idx, len(unique_dates) - 2)
-            valid_end_idx = min(valid_end_idx, len(unique_dates) - 1)
+            add_info = df[
+                [
+                    "UNIQUE_ID",
+                    "CITY_NAME",
+                    "CITY_ID",
+                    "SHOP_NAME",
+                    "SHOP_ID",
+                    "ITEM_CATEGORY_NAME",
+                    "ITEM_CATEGORY_ID",
+                    "ITEM_NAME",
+                    "ITEM_ID",
+                ]
+            ].drop_duplicates()
 
-            train_end_date = pd.Timestamp(unique_dates[train_end_idx - 1])
-            valid_end_date = pd.Timestamp(unique_dates[valid_end_idx - 1])
+            full_df = pd.merge(full_df, add_info, how="left", on="UNIQUE_ID")
 
-            train_df = df[df["SPLIT_DATE"] <= train_end_date].drop(columns=["SPLIT_DATE"])
-            valid_df = df[(df["SPLIT_DATE"] > train_end_date) & (df["SPLIT_DATE"] <= valid_end_date)].drop(columns=["SPLIT_DATE"])
-            test_df = df[df["SPLIT_DATE"] > valid_end_date].drop(columns=["SPLIT_DATE"])
+            out = os.path.join(self.config.root_dir, "05full_df.csv")
+            full_df.to_csv(out, index=False)
+            logging.info(f"Saved full range dataframe to {out}")
 
-            return train_df, valid_df, test_df
+            print("Full range stage completed")
+            return full_df
+
         except Exception as e:
             raise SalesForecastException(e, sys)
 
-    def run_pipeline(self) -> None:
+    # -------------------- DROP NULLS --------------------
+    def drop_nulls(self, df: pd.DataFrame) -> pd.DataFrame:
         try:
-            os.makedirs(self.config.root_dir, exist_ok=True)
-            if not os.path.exists(self.config.source_path):
-                raise FileNotFoundError(f"No existe source_path: {self.config.source_path}")
+            cols = [
+                "MONTHLY_SALES",
+                "MONTHLY_REVENUE",
+                "UNIQUE_DAYS_WITH_SALES",
+                "TOTAL_TRANSACTIONS",
+                "MONTHLY_MEAN_PRICE",
+                "MONTHLY_HOLIDAYS_DAYS_REVENUE",
+                "MONTHLY_HOLIDAYS_DAYS_SALES",
+                "MONTHLY_WORK_DAYS_SALES",
+            ]
+            df[cols] = df[cols].fillna(0)
 
-            source_df = pd.read_csv(self.config.source_path)
-            self._validate_schema(source_df)
+            out = os.path.join(self.config.root_dir, "06full_df.csv")
+            df.to_csv(out, index=False)
+            logging.info(f"Saved null-filled dataframe to {out}")
 
-            transformed_df = self.build_modeling_dataframe(source_df)
-            train_df, valid_df, test_df = self.split_transformed_data(transformed_df)
+            print("Drop nulls stage completed")
+            return df
 
-            train_path = os.path.join(self.config.root_dir, "train_transformed.csv")
-            valid_path = os.path.join(self.config.root_dir, "valid_transformed.csv")
-            test_path = os.path.join(self.config.root_dir, "test_transformed.csv")
-            all_path = os.path.join(self.config.root_dir, "preprocessed.csv")
+        except Exception as e:
+            raise SalesForecastException(e, sys)
 
-            train_df.to_csv(train_path, index=False)
-            valid_df.to_csv(valid_path, index=False)
-            test_df.to_csv(test_path, index=False)
-            pd.concat([train_df, valid_df, test_df], ignore_index=True).to_csv(all_path, index=False)
+    # -------------------- EXECUTE TRANSFORMATIONS --------------------
+    def execute_transformations(self, df: pd.DataFrame) -> pd.DataFrame:
+        try:
+            transformations = [
+                (["DATE", "ITEM_ID"], "MONTHLY_SALES", np.sum, "SUM"),
+                (["DATE", "ITEM_ID"], "MONTHLY_HOLIDAYS_DAYS_SALES", np.sum, "SUM"),
+                (["DATE", "ITEM_ID"], "TOTAL_TRANSACTIONS", np.sum, "SUM"),
+                (["DATE", "ITEM_CATEGORY_ID"], "MONTHLY_HOLIDAYS_DAYS_SALES", np.sum, "SUM"),
+            ]
 
-            logging.info(
-                "Transformacion OK | train=%s valid=%s test=%s",
-                train_df.shape,
-                valid_df.shape,
-                test_df.shape,
-            )
-            print("All preprocessing stages completed. Output in:", all_path)
+            for gl, target, func, name in transformations:
+                new_col = "_".join(gl + [target, name])
+                temp = df.groupby(gl)[target].agg(func).reset_index().rename(columns={target: new_col})
+                temp[f"{new_col}_LAG1"] = temp.groupby(gl[1:])[new_col].shift(1)
+                df = pd.merge(df, temp, on=gl, how="left")
+
+            out = os.path.join(self.config.root_dir, "07full_df.csv")
+            df.to_csv(out, index=False)
+            logging.info(f"Saved transformed dataframe to {out}")
+
+            print("Transformations stage completed")
+            return df
+
+        except Exception as e:
+            raise SalesForecastException(e, sys)
+
+    # -------------------- DROP COLUMNS --------------------
+    def columns_drop(self, df: pd.DataFrame) -> pd.DataFrame:
+        try:
+            columns_to_drop = [
+                "DATE_ITEM_ID_MONTHLY_SALES_SUM",
+                "DATE_ITEM_ID_MONTHLY_HOLIDAYS_DAYS_SALES_SUM",
+                "DATE_ITEM_ID_TOTAL_TRANSACTIONS_SUM",
+                "DATE_ITEM_CATEGORY_ID_MONTHLY_HOLIDAYS_DAYS_SALES_SUM",
+                "MONTHLY_REVENUE",
+                "UNIQUE_DAYS_WITH_SALES",
+                "TOTAL_TRANSACTIONS",
+                "MONTHLY_MEAN_PRICE",
+                "CITY_NAME",
+                "SHOP_NAME",
+                "ITEM_CATEGORY_NAME",
+                "ITEM_NAME",
+                "MONTHLY_HOLIDAYS_DAYS_SALES",
+                "MONTHLY_WORK_DAYS_SALES",
+                "SHOP_ID",
+            ]
+            df = df.drop(columns=[c for c in columns_to_drop if c in df.columns])
+            df = df.drop_duplicates()
+
+            out = os.path.join(self.config.root_dir, "08full_df.csv")
+            df.to_csv(out, index=False)
+            logging.info(f"Saved final dataframe to {out}")
+
+            print("Columns drop stage completed")
+            return df
+
+        except Exception as e:
+            raise SalesForecastException(e, sys)
+
+    # -------------------- RUN PIPELINE --------------------
+    def run_pipeline(self):
+        try:
+            # ---------- TRAIN ----------
+            train_df = pd.read_csv(self.config.train_path)
+            train_df = self.preprocess_df(train_df)
+            train_df = self.time_vars(train_df)
+            train_df = self.cash_vars(train_df)
+            train_monthly = self.groupby_month(train_df)
+            train_full = self.build_full_range(train_df, train_monthly)
+            train_full = self.drop_nulls(train_full)
+            train_full = self.execute_transformations(train_full)
+            train_final = self.columns_drop(train_full)
+
+            train_final_path = os.path.join(self.config.root_dir, "train_transformed.csv")
+            train_final.to_csv(train_final_path, index=False)
+
+            # ---------- TEST ----------
+            test_df = pd.read_csv(self.config.test_path)
+            test_df = self.preprocess_df(test_df)
+            test_df = self.time_vars(test_df)
+            test_df = self.cash_vars(test_df)
+            test_monthly = self.groupby_month(test_df)
+            test_full = self.build_full_range(test_df, test_monthly)
+            test_full = self.drop_nulls(test_full)
+            test_full = self.execute_transformations(test_full)
+            test_final = self.columns_drop(test_full)
+
+            test_final_path = os.path.join(self.config.root_dir, "test_transformed.csv")
+            test_final.to_csv(test_final_path, index=False)
+
+            # ---------- COMBINAR Y GUARDAR FINAL ----------
+            final_df = pd.concat([train_final, test_final], ignore_index=True)
+            final_path = os.path.join(self.config.root_dir, "preprocessed.csv")
+            final_df.to_csv(final_path, index=False)
+            logging.info(f"Saved final preprocessed dataframe to {final_path}")
+
+            print("All preprocessing stages completed. Output in:", final_path)
+
         except Exception as e:
             raise SalesForecastException(e, sys)
 
 
+# -------------------- MAIN --------------------
 if __name__ == "__main__":
+    preprocess_dir = os.path.join("artifacts", "preprocessed")
+    os.makedirs(preprocess_dir, exist_ok=True)
+
     config = DataTransformationConfig(
-        root_dir=os.path.join("artifacts", "preprocessed"),
-        source_path=os.path.join("artifacts", "feature_store", "forecast.csv"),
+        root_dir=preprocess_dir,
+        train_path="artifacts/train/train.csv",
+        test_path="artifacts/test/test.csv",
     )
-    DataTransformation(config).run_pipeline()
+
+    transformer = DataTransformation(config)
+    transformer.run_pipeline()
+  
+  

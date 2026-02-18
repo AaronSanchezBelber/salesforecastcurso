@@ -1,0 +1,71 @@
+services:
+  # Servicio principal de Apache Airflow
+  airflow:
+  # Construye la imagen usando el Dockerfile del directorio actual
+    build: .
+  # Nombre del contenedor
+    container_name: airflow
+  # Archivo .env desde donde se cargan variables de entorno
+    env_file: .env
+
+    environment:
+      # Tipo de ejecutor de Airflow (SequentialExecutor para entornos simples)
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor 
+      # Desactiva la carga de DAGs de ejemplo
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      # Conexión a la base de datos de Airflow (SQLite en este caso)
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      # Credenciales del usuario administrador de Airflow
+      AIRFLOW_USERNAME: admin
+      AIRFLOW_PASSWORD: admin
+      # URL de conexión a MongoDB (tomada del .env)
+      MONGO_DB_URL: ${MONGO_DB_URL}
+      # Nombre de la base de datos en MongoDB
+      MONGO_DB: SalesForecastCurso
+      # Nombre de la colección en MongoDB
+      MONGO_COLLECTION: forecastCurso
+      # Ruta del archivo CSV principal dentro del contenedor
+      CSV_PATH: /opt/airflow/data/forecast.csv
+      # Ruta del CSV por lotes (batch de 100 filas)
+      BATCH_CSV_PATH: /opt/airflow/data/sales_train_merged_batch_100.csv
+      # Ruta del archivo donde se guarda el estado (conteo de filas procesadas)
+      STATE_PATH: /opt/airflow/state/row_count.json
+
+    volumes:
+      # DAGs de Airflow
+        - ./dags:/opt/airflow/dags
+        # Datos (CSV, etc.)
+        - ./data:/opt/airflow/data
+        # Logs de Airflow
+        - ./logs:/opt/airflow/logs
+        # Plugins personalizados
+        - ./plugins:/opt/airflow/plugins
+        # Estado persistente (por ejemplo, progreso de carga)
+        - ./state:/opt/airflow/state
+    # Mapeo de puertos (host:contenedor)
+    ports:
+      - "8089:8080"
+
+    # Comando que se ejecuta al iniciar el contenedor
+    command:
+      - bash
+      - -c
+      - |
+        # Inicializa la base de datos de Airflow
+        airflow db init
+
+        # Crea el usuario administrador
+        airflow users create \
+          --username ${AIRFLOW_USERNAME} \
+          --password ${AIRFLOW_PASSWORD} \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com
+
+        # Inicia el webserver y el scheduler
+        airflow webserver & airflow scheduler
+
+
+
+
